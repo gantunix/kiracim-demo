@@ -206,7 +206,9 @@
     .check-row label { display: flex; align-items: center; gap: 6px; }
     .check-row input { accent-color: var(--green); }
     .modal-actions { display: flex; justify-content: end; gap: 9px; margin-top: 19px; }
-    .detail-visual { height: 185px; display: grid; place-items: center; margin-bottom: 18px; border-radius: 14px; }
+    .detail-visual { height: 185px; display: grid; place-items: center; margin-bottom: 18px; border-radius: 14px; overflow: hidden; }
+    .detail-photo-gallery { width: 100%; height: 100%; display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 7px; padding: 7px; overflow-y: auto; }
+    .detail-photo-gallery img { width: 100%; height: 100%; min-height: 78px; object-fit: cover; border-radius: 8px; }
     .detail-emoji { font-size: 82px; }
     .detail-facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 14px 0; }
     .fact { padding: 10px; background: #f3f4ed; border-radius: 11px; }
@@ -477,7 +479,7 @@
                 <input id="searchInput" type="search" placeholder="Aramak istediğin eşya..." aria-label="Eşya ara">
               </div>
               <select class="search-location" id="districtFilter" aria-label="İlçe seç">
-                <option value="">İzmir - Tüm ilçeler</option><option>Bornova</option><option>Karşıyaka</option><option>Konak</option><option>Buca</option><option>Balçova</option><option>Çiğli</option>
+                <option value="">İzmir - Tüm ilçeler</option><option>Balçova</option><option>Bornova</option><option>Buca</option><option>Çiğli</option><option>Güzelbahçe</option><option>Karşıyaka</option><option>Konak</option><option>Narlıdere</option>
               </select>
               <button class="btn btn-primary" type="submit">Ara <span aria-hidden="true">→</span></button>
             </form>
@@ -621,6 +623,7 @@
     let selectedDistrict = "";
     let toastTimer;
     let listingWizardStep = 1;
+    let previewPhotoUrls = [];
 
     function escapeHTML(value) {
       return String(value).replace(/[&<>"']/g, character => ({
@@ -636,19 +639,38 @@
       return price ? new Intl.NumberFormat("tr-TR").format(price) + " TL" : "Takas";
     }
 
+    function normalizeDimensions(value) {
+      const match = String(value).trim().match(/^(\d+(?:[.,]\d+)?)\s*[x×]\s*(\d+(?:[.,]\d+)?)\s*[x×]\s*(\d+(?:[.,]\d+)?)\s*(?:cm)?$/i);
+      if (!match) return "";
+      const dimensions = match.slice(1);
+      if (dimensions.some(dimension => !Number.isFinite(Number(dimension.replace(",", "."))) || Number(dimension.replace(",", ".")) <= 0)) return "";
+      return `${dimensions.map(dimension => dimension.replace(".", ",")).join(" × ")} cm`;
+    }
+
+    function getItemPhotos(item) {
+      if (item.photoUrls && item.photoUrls.length) return item.photoUrls;
+      return item.photoUrl ? [item.photoUrl] : [];
+    }
+
+    function clearPhotoPreviewUrls() {
+      previewPhotoUrls.forEach(url => URL.revokeObjectURL(url));
+      previewPhotoUrls = [];
+    }
+
     function listingCardMarkup(item) {
+      const photos = getItemPhotos(item);
       return `
         <article class="listing" data-item-id="${item.id}" tabindex="0" aria-label="${escapeHTML(item.title)}, ${formatPrice(item.price)}">
           <div class="listing-visual" style="background:${item.bg}">
             <span class="listing-mode">${escapeHTML(item.mode)}</span>
             <button class="heart" data-favorite="${item.id}" aria-label="Favorilere ekle">♡</button>
-            ${item.photoUrl ? `<img class="listing-photo" src="${item.photoUrl}" alt="">` : `<span class="item-emoji" aria-hidden="true">${item.emoji}</span>`}
+            ${photos.length ? `<img class="listing-photo" src="${photos[0]}" alt="">` : `<span class="item-emoji" aria-hidden="true">${item.emoji}</span>`}
           </div>
           <div class="listing-info">
             <h3 class="listing-title">${escapeHTML(item.title)}</h3>
             <div class="listing-meta"><span>⌖ ${escapeHTML(item.district)}, İzmir</span><span>${escapeHTML(item.condition)}</span></div>
             <div class="listing-bottom">
-              <div><div class="price">${formatPrice(item.price)}</div><div class="price-note">${item.price ? "Takas teklifi değerlendirilebilir" : "Takas teklifi bekliyor"}</div></div>
+              <div><div class="price">${formatPrice(item.price)}</div><div class="price-note">${item.price ? (item.mode === "Satılık" ? "Doğrudan satın al" : "Takas teklifi değerlendirilebilir") : "Takas teklifi bekliyor"}</div></div>
               <span class="avatar" aria-label="İlan sahibi">${escapeHTML(item.owner)}</span>
             </div>
           </div>
@@ -684,6 +706,7 @@
     }
 
     function closeModal() {
+      clearPhotoPreviewUrls();
       backdrop.classList.remove("open");
       document.body.style.overflow = "";
     }
@@ -730,16 +753,27 @@
           showToast("İlan başlığını yaz.");
           return false;
         }
-        if (!form.elements.dimensions.value.trim()) {
-          form.elements.dimensions.focus();
-          showToast("Eşyanın ölçülerini gir.");
+        if (form.elements.photos.files.length > 10) {
+          form.elements.photos.focus();
+          showToast("En fazla 10 fotoğraf seçebilirsin.");
           return false;
         }
+        const dimensions = normalizeDimensions(form.elements.dimensions.value);
+        if (!dimensions) {
+          form.elements.dimensions.focus();
+          showToast("Ölçüleri genişlik × derinlik × yükseklik şeklinde gir (ör. 210 × 88 × 82 cm).");
+          return false;
+        }
+        form.elements.dimensions.value = dimensions;
       }
-      if (listingWizardStep === 2 && !form.elements.noFlaw.checked && !form.elements.flaw.value.trim()) {
-        form.elements.flaw.focus();
-        showToast("Kusur varsa açıklamasını yaz veya kusur olmadığını işaretle.");
-        return false;
+      if (listingWizardStep === 2) {
+        const flawDescription = form.elements.flaw.value.trim();
+        if (form.elements.noFlaw.checked && flawDescription) form.elements.noFlaw.checked = false;
+        if (!form.elements.noFlaw.checked && !flawDescription) {
+          form.elements.flaw.focus();
+          showToast("Kusur açıklaması yaz veya kusur olmadığını işaretle.");
+          return false;
+        }
       }
       if (listingWizardStep === 3) {
         const mode = form.elements.mode.value;
@@ -758,6 +792,7 @@
     }
 
     function openListingForm() {
+      clearPhotoPreviewUrls();
       listingWizardStep = 1;
       openModal(`
         <div class="modal-head"><div><h2 id="modalTitle">Ücretsiz ilan ekle</h2><p class="modal-intro">Eşyanın yeni sahibini bulması için bilgileri adım adım tamamla.</p></div><button class="close-modal" data-close aria-label="Kapat">×</button></div>
@@ -839,9 +874,10 @@
     }
 
     function openDetail(item) {
+      const photos = getItemPhotos(item);
       openModal(`
         <div class="modal-head"><div><h2 id="modalTitle">${escapeHTML(item.title)}</h2><p class="modal-intro">⌖ ${escapeHTML(item.district)}, İzmir · ${escapeHTML(item.condition)}</p></div><button class="close-modal" data-close aria-label="Kapat">×</button></div>
-        <div class="detail-visual" style="background:${item.bg}">${item.photoUrl ? `<img class="listing-photo" src="${item.photoUrl}" alt="">` : `<span class="detail-emoji" aria-hidden="true">${item.emoji}</span>`}</div>
+        <div class="detail-visual" style="background:${item.bg}">${photos.length ? `<div class="detail-photo-gallery">${photos.map((url, index) => `<img src="${url}" alt="${escapeHTML(item.title)} fotoğrafı ${index + 1}">`).join("")}</div>` : `<span class="detail-emoji" aria-hidden="true">${item.emoji}</span>`}</div>
         <div class="price">${formatPrice(item.price)}</div>
         <div class="detail-facts">
           <div class="fact"><small>ÖLÇÜLER</small><b>${escapeHTML(item.dimensions)}</b></div>
@@ -962,12 +998,26 @@
       }
     });
 
+    modal.addEventListener("input", event => {
+      if (event.target.id === "itemFlaw" && event.target.value.trim()) {
+        const noFlaw = modal.querySelector('[name="noFlaw"]');
+        if (noFlaw) noFlaw.checked = false;
+      }
+    });
+
     modal.addEventListener("change", event => {
       if (event.target.id === "itemPhotos") {
         const files = Array.from(event.target.files || []);
-        if (files.length > 10) showToast("En fazla 10 fotoğraf seçebilirsin.");
         const preview = document.getElementById("photoPreview");
-        preview.innerHTML = files.slice(0, 10).map(file => `<img src="${URL.createObjectURL(file)}" alt="Seçilen ürün fotoğrafı">`).join("");
+        clearPhotoPreviewUrls();
+        if (files.length > 10) {
+          event.target.value = "";
+          preview.innerHTML = "";
+          showToast("En fazla 10 fotoğraf seçebilirsin. Lütfen yeniden seç.");
+          return;
+        }
+        previewPhotoUrls = files.map(file => URL.createObjectURL(file));
+        preview.innerHTML = previewPhotoUrls.map((url, index) => `<img src="${url}" alt="Seçilen ürün fotoğrafı ${index + 1}">`).join("");
       }
       if (event.target.name === "mode") {
         const mode = event.target.value;
@@ -1021,7 +1071,7 @@
         const swap = mode !== "sale";
         const title = String(formData.get("title")).trim();
         const price = sale ? Number(formData.get("price")) : 0;
-        const photo = formData.get("photos");
+        const photos = Array.from(event.target.elements.photos.files);
         const item = {
           id: Date.now(),
           title,
@@ -1034,7 +1084,7 @@
           emoji: "📦",
           bg: "#e5edf5",
           owner: "Sİ",
-          photoUrl: photo && photo.size ? URL.createObjectURL(photo) : "",
+          photoUrls: photos.map(file => URL.createObjectURL(file)),
           description: swap ? `Takas teklifleri: ${String(formData.get("swapItems")).trim() || "Açık"}` : "Yeni eklenen demo ilanı.",
           flaw: formData.has("noFlaw") ? "Beyan edilecek kusur yok." : String(formData.get("flaw")).trim()
         };
